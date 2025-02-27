@@ -1,0 +1,185 @@
+---
+title: "Climate"
+author: "Manuel Jara"
+date: "2025-02-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Install terra if not already installed
+install.packages("terra")
+```
+
+## Extract rasters from a multiband TIFF
+```{r}
+library(terra)
+
+# Set working directory
+setwd("/home/manueljara/Documents/ENMs/Future_projections")
+
+# Define input and output paths
+input_tif <- "wc2.1_2.5m_bioc_MIROC6_ssp585_2061-2080.tif"  # Replace with your filename
+output_dir <- "MIROC_6_2080_SSP585"
+
+# Create output directory
+if (!dir.exists(output_dir)) dir.create(output_dir)
+
+# Read multiband TIFF
+raster_stack <- rast(input_tif)
+
+# Loop through bands and save as .asc
+for (band in 1:nlyr(raster_stack)) {
+  single_layer <- raster_stack[[band]]
+  
+  # Name output file (e.g., bio1.asc, bio2.asc)
+  output_name <- file.path(output_dir, paste0("bio", band, "_MIROC_6_2080_SSP585.asc"))
+  
+  # Write with AAIGrid driver
+  writeRaster(
+    single_layer,
+    filename = output_name,
+    filetype = "AAIGrid",  # Use GDAL's AAIGrid driver
+    overwrite = TRUE,
+    NAflag = -9999
+  )
+  
+  cat("Saved band", band, "as", output_name, "\n")
+}
+```
+
+## Convert .tif to tiles
+```{r}
+#install.packages("gdalUtilities")
+library(gdalUtilities)
+
+# Define the input directory where your .tif files are located
+data_dir <- "/home/manueljara/Documents/Pollinators/Website"
+# Define the output root directory for the generated tiles
+output_root <- "/home/manueljara/Documents/Pollinators/Website"
+
+# Create the output root directory if it doesn't exist
+if (!dir.exists(output_root)) {
+  dir.create(output_root, recursive = TRUE)
+}
+
+# List all .tif files in the data directory (full paths)
+tif_files <- list.files(data_dir, pattern = "\\.tif$", full.names = TRUE)
+
+# Loop over each TIFF file and convert it into a tiled folder
+for (file in tif_files) {
+  # Get the base name (without extension) to use as the folder name
+  base_name <- tools::file_path_sans_ext(basename(file))
+  
+  # Define the output directory for this TIFF file's tiles
+  out_dir <- file.path(output_root, base_name)
+  
+  # Create the output directory if it doesn't exist
+  if (!dir.exists(out_dir)) {
+    dir.create(out_dir, recursive = TRUE)
+  }
+  
+  cat("Processing", file, "...\n")
+  
+  # Step 1: Convert the TIFF file to 8-bit using gdal_translate
+  temp_vrt <- tempfile(fileext = ".vrt")  # Temporary VRT file
+  translate_cmd <- sprintf("gdal_translate -of VRT -ot Byte -scale %s %s", file, temp_vrt)
+  
+  cat("Running gdal_translate:", translate_cmd, "\n")
+  translate_result <- try(system(translate_cmd, intern = TRUE), silent = TRUE)
+  
+  if (inherits(translate_result, "try-error")) {
+    cat("Error during gdal_translate for", file, ":", translate_result, "\n")
+    next  # Skip to the next file
+  }
+  
+  # Step 2: Generate tiles using gdal2tiles.py
+  tile_cmd <- sprintf("gdal2tiles.py -z 0-10 %s %s", temp_vrt, out_dir)
+  
+  cat("Running gdal2tiles:", tile_cmd, "\n")
+  tile_result <- try(system(tile_cmd, intern = TRUE), silent = TRUE)
+  
+  if (inherits(tile_result, "try-error")) {
+    cat("Error during gdal2tiles for", file, ":", tile_result, "\n")
+  } else {
+    cat("Finished converting", file, "\n")
+  }
+  
+  # Clean up the temporary VRT file
+  if (file.exists(temp_vrt)) {
+    file.remove(temp_vrt)
+  }
+}
+```
+
+
+## Convert tiff into 8-bit tiff (Lower size)
+```{r}
+library(terra)
+
+# Load the raster
+r <- rast("/home/manueljara/Documents/Pollinators/Website/Projection_current.tif")
+
+# Find actual min/max, ignoring NoData values
+valid_range <- range(values(r), na.rm = TRUE)
+print(valid_range)  # Check the range of actual data
+
+library(gdalUtilities)
+
+gdal_translate(
+  src_dataset = "/home/manueljara/Documents/Pollinators/Website/Projection_current.tif",
+  dst_dataset = "/home/manueljara/Documents/Pollinators/Website/Projection_current_8bit.tif",
+  ot = "Byte",  # Convert to 8-bit
+  scale = c(valid_range[1], valid_range[2], 0, 255),  # Scale real range to 0-255
+  co = "COMPRESS=LZW",  # Optional: Apply LZW compression
+  a_nodata = "0"  # Set NoData to 0 instead of -9999
+)
+```
+
+## Modify tiff color range
+```{r}
+# Install required packages if you haven't already:
+# install.packages("raster")
+# install.packages("RColorBrewer")
+
+library(raster)
+library(RColorBrewer)
+
+# 1. Load the grayscale TIF file.
+# Replace "Projection_current.tif" with your file name and path if needed.
+grayscale_raster <- raster("/home/manueljara/Documents/Pollinators/Website/Projection_current.tif")
+
+# 2. Normalize the raster values to the 0-255 range.
+min_val <- minValue(grayscale_raster)
+max_val <- maxValue(grayscale_raster)
+raster_norm <- (grayscale_raster - min_val) / (max_val - min_val)
+raster_scaled <- round(raster_norm * 255)
+
+# 3. Define a color palette for a blue-to-red gradient.
+# Adjust the colors as needed. This example uses blue, yellow, then red.
+palette_func <- colorRampPalette(c("blue", "yellow", "red"))
+pal <- palette_func(256)  # 256 colors
+
+# 4. Map the normalized values to RGB colors.
+# Convert each pixel's value to an index (1-256) and then to an RGB color.
+indices <- getValues(raster_scaled) + 1  # shift to 1-based index
+color_matrix <- col2rgb(pal[indices])    # 3 x N matrix (rows: R, G, B)
+
+# 5. Create separate rasters for R, G, and B.
+raster_R <- setValues(grayscale_raster, color_matrix[1,])
+raster_G <- setValues(grayscale_raster, color_matrix[2,])
+raster_B <- setValues(grayscale_raster, color_matrix[3,])
+
+# 6. Stack the three rasters to form an RGB brick.
+rgb_brick <- brick(raster_R, raster_G, raster_B)
+
+# 7. Write the colored raster to a new TIF file.
+writeRaster(rgb_brick, "Projection_current_colored.tif", format = "GTiff", overwrite = TRUE)
+
+cat("Colored TIF generated: Projection_current_colored.tif\n")
+
+```
+
