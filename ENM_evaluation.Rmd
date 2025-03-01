@@ -1,0 +1,91 @@
+---
+title: "ENM_evaluation"
+author: "Manuel Jara"
+date: "2025-02-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dpi=300,fig.width=20, fig.height=10, echo = TRUE)
+```
+
+```{r}
+# Install dismo R package
+install.packages("dismo")
+```
+
+Load and visualize Maxent predictions (continuous results)
+
+```{r}
+library(dismo)
+library(raster)
+
+# Load current and future suitability raster files (Maxent output)
+current <- raster("/home/manueljara/Documents/ENMs/Current_MIROC6_2040_SSP126/Pseudomonas_aeruginosa_avg.asc")
+future <- raster("/home/manueljara/Documents/ENMs/Current_MIROC6_2040_SSP126/Pseudomonas_aeruginosa_MIROC_6_2040_SSP126_avg.asc")
+
+# Plot the suitability maps
+par(mfrow = c(1, 2))
+plot(current, main = "Current Suitability")
+plot(future, main = "Future Suitability")
+
+```
+
+
+Let's determine range shift & habitat gain/loss  - First, transform the continuous rasters into binary, select a threshold considering maxentResults.csv 
+
+```{r}
+# Load required libraries
+library(raster)
+library(ggplot2)
+library(sf)
+library(dplyr)
+
+# Load the current raster
+current <- raster("/home/manueljara/Documents/ENMs/Binary_maps/Current_binary.tif")
+
+# Load two future rasters (adjust file paths as needed)
+ssp126 <- raster("/home/manueljara/Documents/ENMs/Binary_maps/MIROC_2040_SSP126.tif")
+ssp585 <- raster("/home/manueljara/Documents/ENMs/Binary_maps/MIROC_2040_SSP585.tif")
+
+# Calculate changes for each scenario
+change_ssp126 <- (current * 2) + ssp126
+change_ssp585 <- (current * 2) + ssp585
+
+# Convert rasters to data frames with scenario labels
+df_ssp126 <- as.data.frame(change_ssp126, xy = TRUE) %>% mutate(scenario = "SSP126")
+df_ssp585 <- as.data.frame(change_ssp585, xy = TRUE) %>% mutate(scenario = "SSP585")
+
+# Combine all data frames into one
+df_combined <- bind_rows(df_ssp126, df_ssp585)
+colnames(df_combined) <- c("x", "y", "value", "scenario")
+
+# Load world map for background
+world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf")
+
+# Create faceted plot
+map <- ggplot() +
+  geom_sf(data = world, fill = "lightgrey", color = "black") +
+  geom_raster(data = df_combined, aes(x = x, y = y, fill = factor(value)), alpha = 0.6) +
+  scale_fill_manual(
+    values = c("gray", "green", "red", "blue"),
+    labels = c("Stable unsuitable", "Newly suitable", "Loss", "Stable suitable"),
+    name = "Change Category",
+    na.value = "lightblue"
+  ) +
+  facet_wrap(~ scenario, ncol = 2) +  # Two columns for SSP126 and SSP585
+  coord_sf(xlim = c(-180, 180), ylim = c(-90, 90)) +
+  theme_minimal() +
+  labs(
+    title = "Change in Suitable Areas: Current vs. Future Scenarios (2040)",
+    caption = "Data source: ENMs Binary Maps"
+  ) +
+  theme(legend.position = "bottom")
+
+# Display the plot
+print(map)
+
+# Save the plot (adjust dimensions for two panels)
+ggsave("change_map_2040.png", map, width = 12, height = 6, dpi = 300)
+```
+
