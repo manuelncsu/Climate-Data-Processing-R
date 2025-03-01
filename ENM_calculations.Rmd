@@ -1,0 +1,233 @@
+---
+title: "ENM_proportion"
+author: "Manuel Jara"
+date: "2025-02-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dpi=300,fig.width=20, fig.height=10, echo = TRUE)
+```
+
+## R Markdown
+
+```{r Load packages}
+# Load required libraries
+library(raster)    # For handling raster data
+library(sf)        # For handling shapefiles (vector data)
+library(dplyr)     # For data manipulation
+library(rnaturalearth)  # To download country shapefile
+```
+
+```{r}
+# Step 1: Load the binary suitability raster
+# Replace the file path with the location of your raster file
+suitability_raster <- raster("/home/manueljara/Documents/ENMs/Binary_maps/MIROC_2080_SSP585.tif")
+
+# Step 2: Load country shapefile from Natural Earth
+# Downloads a medium-resolution country dataset
+countries <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Ensure the shapefile matches the raster's coordinate reference system (CRS)
+# Assuming the raster is in WGS84 (EPSG:4326), transform the shapefile if needed
+countries <- st_transform(countries, crs = crs(suitability_raster))
+
+# Step 3: Define a function to calculate the proportion of suitable area
+calculate_suitability_proportion <- function(raster, country_sf) {
+  # Extract raster values within the country boundaries
+  extracted <- raster::extract(raster, country_sf, na.rm = TRUE)
+  
+  # Calculate the number of suitable pixels (value == 1)
+  suitable_pixels <- sum(extracted[[1]] == 1, na.rm = TRUE)
+  
+  # Calculate the total number of pixels (excluding NA values)
+  total_pixels <- sum(!is.na(extracted[[1]]))
+  
+  # Calculate proportion as a percentage
+  proportion <- (suitable_pixels / total_pixels) * 100
+  
+  return(proportion)
+}
+
+# Step 4: Apply the function to each country and store results
+# Initialize an empty data frame to store the results
+results <- data.frame(country = character(), proportion_suitable = numeric())
+
+# Loop through each country in the shapefile
+for (i in 1:nrow(countries)) {
+  country_name <- countries$name[i]  # Get the country name
+  country_sf <- countries[i, ]       # Subset to the current country's geometry
+  
+  # Calculate the proportion of suitable area
+  proportion <- calculate_suitability_proportion(suitability_raster, country_sf)
+  
+  # Append results to the data frame
+  results <- rbind(results, data.frame(country = country_name, 
+                                       proportion_suitable = proportion))
+}
+
+# Step 5: Display and save the results
+# Print the results to the console
+print(results)
+
+# Save the results to a CSV file for further use
+write.csv(results, "suitability_proportions_MIROC_2080_SSP585.csv", row.names = FALSE)
+
+# Optional: Sort results to identify countries most affected
+results_sorted <- results %>% 
+  arrange(desc(proportion_suitable))
+head(results_sorted, 10)  # Show top 10 countries with highest suitability proportions
+```
+
+## Let's do some nice plots
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(viridis)
+
+# Read the data
+data <- read.csv("/home/manueljara/Documents/ENMs/suitability_proportions_all.csv")
+
+# Aggregate data by continent
+continent_data <- data %>%
+  group_by(Continent) %>%
+  summarize(
+    Current = mean(Current, na.rm = TRUE),
+    `X2040_SSP126` = mean(`X2040_SSP126`, na.rm = TRUE),
+    `X2040_SSP585` = mean(`X2040_SSP585`, na.rm = TRUE),
+    `X2060_SSP126` = mean(`X2060_SSP126`, na.rm = TRUE),
+    `X2060_SSP585` = mean(`X2060_SSP585`, na.rm = TRUE),
+    `X2080_SSP126` = mean(`X2080_SSP126`, na.rm = TRUE),
+    `X2080_SSP585` = mean(`X2080_SSP585`, na.rm = TRUE)
+  )
+
+# Reshape data to long format for plotting
+continent_data_long <- continent_data %>%
+  pivot_longer(cols = -Continent, names_to = "Scenario", values_to = "Percentage") %>%
+  mutate(
+    Time = case_when(
+      Scenario == "Current" ~ "Current",
+      grepl("2040", Scenario) ~ "2040",
+      grepl("2060", Scenario) ~ "2060",
+      grepl("2080", Scenario) ~ "2080"
+    ),
+    SSP = case_when(
+      grepl("SSP126", Scenario) ~ "SSP126",
+      grepl("SSP585", Scenario) ~ "SSP585",
+      TRUE ~ "Current"
+    )
+  )
+
+# Plot using the long-format dataframe
+ggplot(continent_data_long, aes(x = Time, y = Percentage, color = Continent, linetype = SSP, group = interaction(Continent, SSP))) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3, aes(shape = SSP)) +
+  scale_color_viridis_d(option = "viridis", name = "Continent") +
+  scale_linetype_manual(values = c("SSP126" = "solid", "SSP585" = "dashed"), name = "Scenario") +
+  scale_shape_manual(values = c("SSP126" = 16, "SSP585" = 17), name = "Scenario") +
+  labs(
+    title = "Global Trends in P. aeruginosa Suitability by Continent and SSP Scenario (2040–2080)",
+    x = "Time Period",
+    y = "Mean Suitability Percentage (%)",
+    caption = "Data source: ENM Binary Maps"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 12)
+  ) +
+  scale_x_discrete(limits = c("Current", "2040", "2060", "2080")) +
+  scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 20))
+
+# Save the figure
+ggsave("paeruginosa_climate_impact.png", width = 12, height = 8, dpi = 300)
+```
+
+
+```{r}
+# install.packages("ggplotify")  # if not installed
+library(dplyr)
+library(pheatmap)
+library(viridis)
+library(ggplotify)
+library(ggplot2)
+
+# 1. Read your CSV
+data <- read.csv("/home/manueljara/Documents/ENMs/suitability_proportions_all.csv")
+
+# 2. Group by 'Continent' and mean of numeric columns
+continent_data <- data %>%
+  group_by(Continent) %>%
+  summarise(across(where(is.numeric), mean, na.rm = TRUE))
+
+# 3. Convert 'Continent' to row names
+rownames(continent_data) <- continent_data$Continent
+continent_matrix <- as.data.frame(continent_data[, -1, drop = FALSE])
+
+# -- PRINT out the columns you have right now --
+cat("Columns in 'continent_matrix' BEFORE renaming:\n")
+print(colnames(continent_matrix))
+
+# If your columns have a leading 'X', remove it
+colnames(continent_matrix) <- sub("^X", "", colnames(continent_matrix))
+
+cat("\nColumns in 'continent_matrix' AFTER renaming:\n")
+print(colnames(continent_matrix))
+
+# 4. Desired column order
+desired_order <- c(
+  "Current", 
+  "2040_SSP126", "2040_SSP585", 
+  "2060_SSP126", "2060_SSP585", 
+  "2080_SSP126", "2080_SSP585"
+)
+
+cat("\nDesired order:\n")
+print(desired_order)
+
+# Intersect with actual columns
+common_cols <- intersect(desired_order, colnames(continent_matrix))
+cat("\nColumns actually found in your data:\n")
+print(common_cols)
+
+# Reorder the data to keep only those columns
+continent_matrix <- continent_matrix[, common_cols, drop = FALSE]
+
+# 5. Dynamic text color
+mat_values <- as.matrix(continent_matrix)
+val_range  <- range(mat_values, na.rm = TRUE)
+val_mid    <- mean(val_range, na.rm = TRUE)
+
+text_colors <- matrix("black", nrow = nrow(mat_values), ncol = ncol(mat_values))
+text_colors[mat_values > val_mid] <- "white"
+
+# 6. pheatmap with NO clustering
+p <- pheatmap(
+  mat_values,
+  color           = viridis(100, direction = -1),  # or direction=1 if you prefer
+  cluster_rows    = FALSE,
+  cluster_cols    = FALSE,
+  fontsize        = 14,
+  fontsize_row    = 12,
+  fontsize_col    = 12,
+  angle_col       = 45,
+  display_numbers = TRUE,
+  fontsize_number = 10,
+  number_color    = text_colors,
+  main            = "Mean Suitability by Continent"
+)
+
+# 7. Convert to ggplot-like object and save
+p_gg <- as.ggplot(p)
+
+dev.new(width = 12, height = 8)
+print(p_gg)
+
+ggsave("heatmap_climate_impact.png", plot = p_gg, width = 12, height = 8, dpi = 300)
+
+```
+
