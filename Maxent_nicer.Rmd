@@ -1,0 +1,154 @@
+---
+title: "Maxent_nicer"
+author: "Manuel Jara"
+date: "2025-03-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+bio12_data <- read.table("/home/manueljara/Documents/ENMs/Response_curves/plots/Pseudomonas_aeruginosa_0_bio12.dat", header = TRUE)
+```
+
+```{r}
+# Load required libraries
+library(dplyr)      # For data manipulation
+library(tidyr)      # For separating columns
+library(mgcv)       # For fitting GAM
+library(ggplot2)    # For plotting
+
+# Example: Loading the data (replace "path/to/bio11.dat" with your actual file path)
+# For this example, I'll assume the data is already loaded as bio11_data
+# If you need to read it, uncomment and adjust the following line:
+# bio11_data <- read.table("path/to/bio11.dat", header = TRUE, stringsAsFactors = FALSE)
+
+# Since you provided str(bio11_data), I'll assume it's already in memory with this structure:
+# 'data.frame': 501 obs. of 1 variable: $variable.x.y: chr "bio11,-75.76360359191895,0.7609149217605591" ...
+
+# Parse the variable.x.y column into separate columns
+bio12_data <- bio12_data %>%
+  separate(variable.x.y, into = c("variable", "bio12", "suitability"), sep = ",") %>%
+  mutate(
+    bio12 = as.numeric(bio12),         # Convert bio11 to numeric
+    suitability = as.numeric(suitability)  # Convert suitability to numeric
+  ) %>%
+  select(variable, bio12, suitability) # Keep only the parsed columns
+
+# Verify the structure (optional, for debugging)
+# str(bio11_data)
+
+# Fit a generalized additive model (GAM) to model the relationship
+model <- gam(suitability ~ s(bio12), data = bio12_data)
+
+# Create a prediction dataset across the range of bio11 values
+pred_data <- data.frame(bio12 = seq(min(bio12_data$bio12, na.rm = TRUE), 
+                                    max(bio12_data$bio12, na.rm = TRUE), 
+                                    length.out = 100))
+
+# Predict suitability with standard errors for confidence intervals
+pred <- predict(model, newdata = pred_data, type = "response", se.fit = TRUE)
+pred_data$mean_suitability <- pred$fit
+pred_data$lower_ci <- pred$fit - 1.96 * pred$se.fit  # Lower 95% CI
+pred_data$upper_ci <- pred$fit + 1.96 * pred$se.fit  # Upper 95% CI
+
+# Create the publication-ready plot
+ggplot(pred_data, aes(x = bio12, y = mean_suitability)) +
+  geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.5, fill = "blue") +  # 95% CI ribbon
+  geom_line(color = "black", size = 1) +  # Mean response line
+  labs(
+    title = "",
+    x = "Mean Temperature of Coldest Quarter (°C)",
+    y = "Suitability (cloglog output)"
+  ) +
+  theme_minimal() +  # Clean, minimal theme
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),  # Title formatting
+    axis.title = element_text(size = 14),                 # Axis label formatting
+    axis.text = element_text(size = 14)                   # Axis tick label formatting
+  )
+
+# Save the plot as a high-resolution PNG
+ggsave("bio12_response_curve.png", dpi = 300, width = 6, height = 4)
+```
+## Response curves for multiple samples, here is an example with 100
+```{r}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(pbapply)  # For progress bars during file processing
+
+# Define the directory path (adjust if necessary)
+dir_path <- "/home/manueljara/Documents/ENMs/Response_curves/plots/"
+
+# Specify the bioclimatic variable of interest
+bio_var <- "bio19"  # Change this to process other variables (e.g., "bio11")
+
+# Generate the file pattern for the specified bio_var (handles runs 0–99)
+file_pattern <- paste0("Pseudomonas_aeruginosa_[0-9]{1,2}_", bio_var, "\\.dat")
+
+# List all files matching the pattern
+file_names <- list.files(path = dir_path, pattern = file_pattern, full.names = TRUE)
+
+# Check if exactly 100 files were found
+if (length(file_names) != 100) {
+  warning(paste("Expected 100 files for", bio_var, "but found", length(file_names), 
+                "files in", dir_path, ". Check the directory or file naming."))
+  if (length(file_names) == 0) {
+    stop("No files found. Execution halted.")
+  }
+}
+
+# Read and process each file with a progress bar
+all_data <- pblapply(file_names, function(fn) {
+  # Read the file, assuming a header and comma-separated values
+  df <- read.table(fn, header = TRUE, stringsAsFactors = FALSE)
+  
+  # Split the single column (adjust 'variable.x.y' if the column name differs)
+  df <- df %>%
+    separate(variable.x.y, into = c("variable", bio_var, "suitability"), sep = ",") %>%
+    mutate(
+      !!bio_var := as.numeric(get(bio_var)),  # Convert bio_var values to numeric
+      suitability = as.numeric(suitability)   # Convert suitability to numeric
+    )
+  return(df)
+}) %>% bind_rows(.id = "run")  # Combine all dataframes, adding a 'run' identifier
+
+# Summarize the data: calculate mean and 95% CI for each bio_var value
+summary_data <- all_data %>%
+  group_by(!!sym(bio_var)) %>%  # Group by the bioclimatic variable
+  summarize(
+    mean_suitability = mean(suitability, na.rm = TRUE),
+    sd_suitability = sd(suitability, na.rm = TRUE),
+    n = n(),
+    se = sd_suitability / sqrt(n),
+    lower_ci = mean_suitability - qt(0.95, df = n - 1) * se,
+    upper_ci = mean_suitability + qt(0.95, df = n - 1) * se
+  ) %>%
+  arrange(!!sym(bio_var))  # Sort for smooth plotting
+
+# Create a publication-ready plot
+ggplot(summary_data, aes(x = !!sym(bio_var), y = mean_suitability)) +
+  geom_line(color = "black", size = 1) +  # Mean suitability line
+  geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.2, fill = "blue") +  # 95% CI
+  labs(
+    title = paste(""),
+    x = "Precipitation of the Coldest Quarter (mm)",  # Updated to reflect bio3 (adjust for other variables)
+    y = "Suitability (cloglog output)",
+    caption = ""
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    plot.caption = element_text(size = 8, hjust = 0)
+  )
+
+# Save the plot as a high-resolution image
+ggsave(paste0(bio_var, "_response_curve.png"), dpi = 300, width = 6, height = 4, units = "in")
+```
+
