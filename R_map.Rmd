@@ -1,0 +1,57 @@
+---
+title: "R_map"
+author: "Manuel Jara"
+date: "2025-03-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dpi=300,fig.width=20, fig.height=10, echo = TRUE)
+```
+
+## Install the required R packages
+```{r}
+library(sf)
+library(ggplot2)
+library(rnaturalearth)
+library(rnaturalearthdata)
+```
+
+## Load the world map data
+```{r}
+world <- ne_countries(scale = "medium", returnclass = "sf")
+```
+
+## Add occurrence data
+```{r}
+occurrences <- st_read("P_aeruginosa_occurrences.shp")
+```
+
+## Create the plot
+```{r}
+ggplot() +
+  geom_sf(data = world, fill = "lightgray", color = "white", size = 0.2) +  # World map layer
+  geom_sf(data = occurrences, color = "red", size = 1.2, alpha = 0.7) +    # Occurrence points
+  coord_sf(crs = "+proj=robin") +  # Robinson projection
+  labs(title = "Global Occurrence Records of Pseudomonas aeruginosa",
+       subtitle = "Data Source: GBIF, 2003–2024",
+       caption = "") +
+  theme_minimal() +  # Minimalist base theme
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),    # Centered, bold title
+    plot.subtitle = element_text(hjust = 0.5, size = 14),               # Centered subtitle
+    plot.caption = element_text(size = 5),                              # Smaller caption
+    panel.background = element_rect(fill = "white"),                   # White panel background
+    panel.grid.major = element_line(color = "white", size = 0.1),      # Subtle grid lines
+    axis.title = element_blank(),                                      # No axis titles
+    axis.text = element_blank(),                                       # No axis text
+    axis.ticks = element_blank(),                                      # No axis ticks
+    plot.background = element_rect(fill = "white", color = NA)          # White plot background
+  )
+```
+
+## Save the map
+```{r}
+ggsave("P_aeruginosa_occurrence_map.png", width = 10, height = 6, dpi = 300)
+```
+
